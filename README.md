@@ -1,5 +1,10 @@
 # ⚡ kicad-happy
 
+> **b4bz local hardening fork.** See [LOCAL_HARDENING.md](LOCAL_HARDENING.md)
+> for the process-only OAuth cache, blocking fabrication gate, verification,
+> pinned installation, and production boundaries. This is an additive local
+> patch over upstream v2.3.1, not a new upstream release.
+
 [![CI](https://github.com/aklofas/kicad-happy/actions/workflows/ci.yml/badge.svg)](https://github.com/aklofas/kicad-happy/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)

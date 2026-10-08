@@ -128,22 +128,15 @@ If you have a JLCPCB `.kicad_dru` design rules file, import it in KiCad Board Ed
 
 ## Rotation Offsets
 
-JLCPCB's pick-and-place uses different rotation conventions than KiCad for some footprints. Common offsets:
+KiCad footprint orientation and the assembler's component-library orientation
+can differ. There is no safe universal rotation correction for a package family:
+verify each exact component/footprint against pin 1, polarity, board side, native
+placement data, and the assembler's current preview and requirements. Do not
+blindly apply family-wide offsets or Bottom-side mirroring. Inspect the final
+assembly preview before any authorized submission.
 
-| Footprint Family | Typical Offset |
-|-----------------|----------------|
-| SOT-23, SOT-23-5, SOT-23-6 | +180° |
-| SOT-223 | +180° |
-| SOIC-8, SOIC-16 | +90° or +270° |
-| QFN (all sizes) | +90° |
-| SMA/SMB/SMC diodes | +180° |
-| USB-C connectors | Varies — check datasheet |
-
-To fix rotation issues:
-1. Add rotation corrections directly in the CPL file before uploading (adjust the Rotation column)
-2. For custom footprints, verify pin 1 orientation matches JLCPCB expectations
-3. JLCPCB's review step catches major errors, but subtle 180° rotations on symmetric parts (caps, resistors) may slip through
-4. After first assembly order, note any rotation corrections needed and apply them to future CPL exports
+Preparing files does not authorize uploading a design, placing orders, paying,
+or publishing. Each requires explicit user authorization for that action.
 
 ## Ordering Workflow
 

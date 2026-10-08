@@ -336,7 +336,7 @@ The `kicad` skill also creates analyzer JSON and design review markdown reports 
 
 | File | Location | Purpose |
 |------|----------|---------|
-| `digikey_token_cache.json` | System temp dir | OAuth token cache (9-min TTL, mode 0600) |
+| DigiKey OAuth token | Process memory only | Credential-bound reuse, refreshed before expiry; no token files |
 | `manifest.tmp` | `datasheets/` | Atomic write staging — renamed to `manifest.json`, never persists |
 
 ### Cleanup commands
@@ -372,7 +372,7 @@ Keep `bom/bom.csv` tracked — it contains user-curated data (Chosen_Distributor
 - **DigiKey first, Mouser second** for prototyping; LCSC for production
 - **CSV round-trip** — Edit Symbol Fields > Export/Import CSV for bulk updates
 - **Field Name Templates** (KiCad 9+) — pre-define MPN, Manufacturer, LCSC, DigiKey, Mouser
-- **DigiKey token reuse** — cached to temp file with 9-minute TTL; no need to re-auth per call
+- **DigiKey token reuse** — cached only in process memory for at most 9 minutes, bound to both client credentials; each new process authenticates again
 - **Second source** — use `AltMPN` field for critical parts
 - **Price at target qty** — prototype pricing != production pricing
 - **BOM Comments** — use the `BOM Comments` symbol property for ordering/assembly quirks that don't fit in standard fields. Flows into CSV Notes column. Check schematic text annotations, README, and existing CSV notes for scattered BOM info too.

@@ -34,6 +34,10 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+# Shared stdlib-only auth helper, alongside the core KiCad scripts.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "kicad" / "scripts"))
 
 _USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
@@ -67,67 +71,10 @@ def _friendly_filename(mpn: str, description: str = "") -> str:
 
 
 def _get_digikey_token() -> str | None:
-    """Get a DigiKey OAuth token, using a cached version if still valid.
-
-    Caches the token to a temp file with a 9-minute TTL (tokens last 10 minutes).
-    """
-    import tempfile
-    import time
-
-    client_id = os.environ.get("DIGIKEY_CLIENT_ID", "")
-    client_secret = os.environ.get("DIGIKEY_CLIENT_SECRET", "")
-    if not client_id or not client_secret:
-        print("Error: DIGIKEY_CLIENT_ID and DIGIKEY_CLIENT_SECRET required", file=sys.stderr)
-        return None
-
-    cache_path = os.path.join(tempfile.gettempdir(), "digikey_token_cache.json")
-
-    # Check cache
-    try:
-        if os.path.exists(cache_path):
-            with open(cache_path) as f:
-                cached = json.load(f)
-            if (cached.get("client_id") == client_id
-                    and cached.get("expires_at", 0) > time.time()):
-                return cached["token"]
-    except (json.JSONDecodeError, OSError):
-        pass
-
-    # Fetch new token
-    try:
-        token_data = urllib.parse.urlencode({
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "client_credentials",
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.digikey.com/v1/oauth2/token",
-            data=token_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            token_resp = json.loads(resp.read())
-        token = token_resp.get("access_token", "")
-        if not token:
-            print("Error: Failed to get OAuth token", file=sys.stderr)
-            return None
-
-        # Cache with 9-minute TTL (token lasts 10 min, 1 min safety margin)
-        try:
-            with open(cache_path, "w") as f:
-                json.dump({
-                    "token": token,
-                    "client_id": client_id,
-                    "expires_at": time.time() + 540,
-                }, f)
-            os.chmod(cache_path, 0o600)
-        except OSError:
-            pass  # caching is best-effort
-
-        return token
-    except Exception as e:
-        print(f"Error: OAuth failed: {e}", file=sys.stderr)
-        return None
+    """Use the credential-bound process cache; never read/write token files."""
+    from digikey_auth import get_digikey_token
+    result = get_digikey_token()
+    return result[0] if result else None
 
 
 def search_digikey(mpn: str) -> dict | None:

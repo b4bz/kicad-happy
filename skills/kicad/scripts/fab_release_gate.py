@@ -16,7 +16,7 @@ Zero external dependencies — Python 3.8+ stdlib only.
 
 import argparse
 import json
-import os
+import math
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 from finding_schema import normalize_severity
 
 
-GATE_VERSION = "1.0"
+GATE_VERSION = "1.1-local"
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ def check_routing(pcb: Dict) -> List[Dict]:
     unrouted = conn.get("unrouted_count", 0)
     complete = conn.get("routing_complete", False)
 
-    if complete or unrouted == 0:
+    if complete and unrouted == 0:
         return [_check("routing", "routing_completeness", "pass",
                         f"All nets routed ({total}/{total})")]
 
@@ -127,12 +127,8 @@ def check_dfm(pcb: Dict) -> List[Dict]:
                         f"Design requires {tier} process — verify fab house capability",
                         {"dfm_tier": tier, "violations": v_summary})]
     else:
-        metrics = dfm.get("metrics", {})
-        if metrics:
-            return [_check("dfm", "fab_capability", "pass",
-                            f"DFM tier: {tier}")]
         return [_check("dfm", "fab_capability", "skip",
-                        "No DFM data available")]
+                        f"No recognized passing DFM assessment (tier: {tier})")]
 
 
 def check_documentation(pcb: Dict) -> List[Dict]:
@@ -238,7 +234,12 @@ def check_gerbers(gerber_data: Optional[Dict]) -> List[Dict]:
 
     # Layer completeness
     completeness = gerber_data.get("completeness", {})
-    missing = completeness.get("missing_layers", [])
+    # Current Gerber analyzer uses missing_required/missing_recommended or
+    # missing (gbrjob). Never interpret a missing legacy field as no defects.
+    missing = (completeness.get("missing_required", [])
+               + completeness.get("missing_recommended", [])
+               + completeness.get("missing", [])
+               + completeness.get("missing_layers", []))
     critical_missing = [l for l in missing
                         if any(k in l.upper() for k in
                                ("F.CU", "B.CU", "EDGE", "F.MASK", "B.MASK",
@@ -247,7 +248,11 @@ def check_gerbers(gerber_data: Optional[Dict]) -> List[Dict]:
     silk_missing = [l for l in missing
                     if any(k in l.upper() for k in ("SILK", "LEGEND"))]
 
-    if not missing:
+    if not completeness["complete"]:
+        checks.append(_check("gerbers", "layer_completeness", "fail",
+                              "Gerber/drill completeness assessment failed",
+                              {"missing_layers": missing}))
+    elif not missing:
         checks.append(_check("gerbers", "layer_completeness", "pass",
                               "All expected layers present"))
     elif critical_missing:
@@ -265,7 +270,7 @@ def check_gerbers(gerber_data: Optional[Dict]) -> List[Dict]:
 
     # Alignment
     alignment = gerber_data.get("alignment", {})
-    aligned = alignment.get("aligned", True)
+    aligned = alignment["aligned"]
     if aligned:
         checks.append(_check("gerbers", "layer_alignment", "pass",
                               "Layer coordinate ranges consistent"))
@@ -313,12 +318,16 @@ def check_emc(emc_data: Optional[Dict]) -> List[Dict]:
 
     summary = emc_data.get("summary", {})
     score = summary.get("emc_risk_score", 0)
-    crits = summary.get("critical", 0)
+    active = [f for f in emc_data.get("findings", []) if not f.get("suppressed")]
+    crits = max(summary.get("critical", 0),
+                summary.get("by_severity", {}).get("error", 0),
+                sum(normalize_severity(f.get("severity")) == "error" for f in active))
+    warnings = sum(normalize_severity(f.get("severity")) == "warning" for f in active)
 
-    if crits > 0:
+    if crits > 0 or warnings > 0:
         return [_check("emc", "emc_risk", "warn",
-                        f"EMC score {score}/100 — {crits} critical finding(s) (advisory)",
-                        {"emc_risk_score": score, "critical": crits})]
+                        f"EMC score {score}/100 — {crits} error, {warnings} warning finding(s) (advisory)",
+                        {"emc_risk_score": score, "critical": crits, "warnings": warnings})]
     else:
         return [_check("emc", "emc_risk", "pass",
                         f"EMC score {score}/100 — no critical findings")]
@@ -396,6 +405,63 @@ def _compute_trust_posture(sch, pcb, thermal_data, emc_data):
     return posture
 
 
+def _integer(value):
+    return type(value) is int and value >= 0
+
+
+def _score(value):
+    return (type(value) in (int, float) and math.isfinite(value)
+            and 0 <= value <= 100)
+
+
+def _findings(value):
+    return isinstance(value, list) and all(isinstance(item, dict) for item in value)
+
+
+def _issues(value):
+    return _findings(value) and all(
+        isinstance(item.get("severity"), str)
+        and item["severity"].upper() in {
+            "ERROR", "WARNING", "INFO", "CRITICAL", "HIGH", "MEDIUM", "LOW",
+        } for item in value
+    )
+
+
+def _strings(value):
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _input_evidence(name, data, fields):
+    """Check the facts consumed by this gate, without inventing defaults.
+
+    This is intentionally not full analyzer-schema validation or CAD verification.
+    Missing/malformed evidence is a skipped check and blocks a passing verdict.
+    """
+    missing = []
+    for path, predicate in fields.items():
+        value = data
+        for key in path.split("."):
+            value = value.get(key) if isinstance(value, dict) else None
+        if not predicate(value):
+            missing.append(path)
+    if missing:
+        return _check("evidence", name + "_inputs", "skip",
+                      f"{name}: missing or malformed release evidence",
+                      {"fields": missing})
+    return _check("evidence", name + "_inputs", "pass",
+                  f"{name}: required gate fields present")
+
+
+def _analysis_findings(name, data):
+    """Do not let known errors disappear behind aggregate release metrics."""
+    active = [f for f in data.get("findings", []) if not f.get("suppressed")]
+    errors = [f for f in active if normalize_severity(f.get("severity")) == "error"]
+    warnings = [f for f in active if normalize_severity(f.get("severity")) == "warning"]
+    return _check("evidence", name + "_findings",
+                  "fail" if errors else "warn" if warnings else "pass",
+                  f"{name}: {len(errors)} error, {len(warnings)} warning finding(s)")
+
+
 # ---------------------------------------------------------------------------
 # Gate orchestrator
 # ---------------------------------------------------------------------------
@@ -410,14 +476,72 @@ def run_gate(sch: Dict, pcb: Dict,
     t0 = time.monotonic()
 
     all_checks: List[Dict] = []
-    all_checks.extend(check_routing(pcb))
-    all_checks.extend(check_bom(sch))
-    all_checks.extend(check_dfm(pcb))
-    all_checks.extend(check_documentation(pcb))
-    all_checks.extend(check_consistency(sch, pcb))
-    all_checks.extend(check_gerbers(gerber_data))
-    all_checks.extend(check_thermal(thermal_data))
-    all_checks.extend(check_emc(emc_data))
+    fields = {
+        "schematic": {
+            "statistics.total_components": lambda v: _integer(v) and v > 0,
+            "statistics.total_nets": _integer,
+            "statistics.missing_mpn": _strings,
+            "statistics.missing_footprint": _strings,
+            "findings": _issues,
+        },
+        "pcb": {
+            "connectivity.total_nets_with_pads": _integer,
+            "connectivity.unrouted_count": _integer,
+            "connectivity.routing_complete": lambda v: type(v) is bool,
+            "statistics.footprint_count": lambda v: _integer(v) and v > 0,
+            "statistics.net_count": _integer,
+            "dfm_summary.dfm_tier": lambda v: isinstance(v, str) and bool(v),
+            "findings": _issues,
+            "silkscreen.documentation_warnings": _findings,
+        },
+        "gerbers": {
+            "completeness.complete": lambda v: type(v) is bool,
+            "alignment.aligned": lambda v: type(v) is bool,
+            "findings": _issues,
+        },
+        "thermal": {"findings": _issues, "summary.thermal_score": _score},
+        "emc": {"findings": _issues, "summary.emc_risk_score": _score},
+    }
+    data = {"schematic": sch, "pcb": pcb, "gerbers": gerber_data,
+            "thermal": thermal_data, "emc": emc_data}
+    valid = {}
+    for name, item in data.items():
+        check = _input_evidence(name, item, fields[name])
+        all_checks.append(check)
+        valid[name] = check["status"] == "pass"
+        if valid[name]:
+            summary = item.get("summary", {})
+            if summary.get("skipped_reason") or summary.get("components_skipped", 0):
+                all_checks.append(_check("evidence", name + "_coverage", "skip",
+                                         f"{name}: analyzer reports skipped analysis"))
+            if name != "emc":
+                all_checks.append(_analysis_findings(name, item))
+
+    if valid["pcb"]:
+        all_checks.extend(check_routing(pcb))
+        all_checks.extend(check_dfm(pcb))
+        all_checks.extend(check_documentation(pcb))
+    if valid["schematic"]:
+        all_checks.extend(check_bom(sch))
+    if valid["schematic"] and valid["pcb"]:
+        all_checks.extend(check_consistency(sch, pcb))
+    if valid["gerbers"]:
+        all_checks.extend(check_gerbers(gerber_data))
+    if valid["thermal"]:
+        all_checks.extend(check_thermal(thermal_data))
+    if valid["emc"]:
+        all_checks.extend(check_emc(emc_data))
+
+    trust = _compute_trust_posture(
+        sch if isinstance(sch, dict) else None,
+        pcb if isinstance(pcb, dict) else None,
+        thermal_data if isinstance(thermal_data, dict) else None,
+        emc_data if isinstance(emc_data, dict) else None,
+    )
+    if trust and trust.get("evidence_blockers"):
+        all_checks.append(_check("evidence", "trust_blockers", "skip",
+                                 "Unresolved analyzer evidence blockers",
+                                 {"blockers": trust["evidence_blockers"]}))
 
     # Apply strict mode
     if strict:
@@ -432,6 +556,8 @@ def run_gate(sch: Dict, pcb: Dict,
 
     if counts["fail"] > 0:
         overall = "FAIL"
+    elif counts["skip"] > 0:
+        overall = "INCOMPLETE"
     elif counts["warn"] > 0:
         overall = "WARN"
     elif counts["pass"] > 0:
@@ -441,11 +567,12 @@ def run_gate(sch: Dict, pcb: Dict,
 
     elapsed = time.monotonic() - t0
 
-    trust = _compute_trust_posture(sch, pcb, thermal_data, emc_data)
-
     result = {
         "gate_version": GATE_VERSION,
         "overall_status": overall,
+        "release_ready": overall == "PASS",
+        "limitations": ["Analyzer gate only; native ERC/DRC, current supplier rules, "
+                        "CAM/assembly inspection and human release approval remain required."],
         "summary": {
             "total_checks": len(all_checks),
             **counts,
@@ -470,10 +597,10 @@ _STATUS_ICONS = {
 }
 
 _OVERALL_ICONS = {
-    "PASS": "PASS — Ready for fabrication",
+    "PASS": "PASS — Analyzer checks passed; engineering release review required",
     "WARN": "WARN — Review warnings before ordering",
     "FAIL": "FAIL — Issues must be resolved",
-    "INCOMPLETE": "INCOMPLETE — Missing required inputs",
+    "INCOMPLETE": "INCOMPLETE — Missing or skipped release checks; submission blocked",
 }
 
 
@@ -487,6 +614,8 @@ def format_text_report(result: Dict) -> str:
     lines.append(f"FABRICATION RELEASE GATE — {_OVERALL_ICONS.get(overall, overall)}")
     lines.append("=" * 60)
     lines.append("")
+    for limitation in result.get("limitations", []):
+        lines.append(f"  Limit: {limitation}")
     lines.append(f"  {summary['pass']} pass  {summary['warn']} warn  "
                  f"{summary['fail']} fail  {summary['skip']} skip")
     lines.append("")
@@ -565,22 +694,23 @@ def main():
     args = parser.parse_args()
 
     def _load(path):
-        if not path or not os.path.isfile(path):
+        if not path:
             return None
         with open(path) as f:
             return json.load(f)
 
-    sch = _load(args.schematic)
-    pcb = _load(args.pcb)
-    if not sch or not pcb:
-        print("Error: schematic and PCB JSON are required", file=sys.stderr)
-        sys.exit(1)
+    try:
+        sch, pcb = _load(args.schematic), _load(args.pcb)
+        gerbers, thermal, emc = (_load(args.gerbers), _load(args.thermal), _load(args.emc))
+    except (OSError, ValueError) as exc:
+        print(f"Error: could not load analyzer input ({type(exc).__name__})", file=sys.stderr)
+        sys.exit(2)
 
     result = run_gate(
         sch, pcb,
-        gerber_data=_load(args.gerbers),
-        thermal_data=_load(args.thermal),
-        emc_data=_load(args.emc),
+        gerber_data=gerbers,
+        thermal_data=thermal,
+        emc_data=emc,
         strict=args.strict,
     )
 
@@ -599,6 +729,10 @@ def main():
         json.dump(result, sys.stdout, indent=indent)
         print(file=sys.stdout)
 
+    # A failed, warning or incomplete release gate must never look successful
+    # to shell automation. Missing checks remain blocking even without --strict.
+    return {"PASS": 0, "FAIL": 1, "INCOMPLETE": 2, "WARN": 3}[result["overall_status"]]
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

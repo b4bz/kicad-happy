@@ -79,6 +79,9 @@ jobs:
       - name: search_lcsc.py --help
         run: python3 skills/lcsc/scripts/search_lcsc.py --help > /dev/null
 
+      - name: Local security and release-gate regressions
+        run: python3 -m unittest discover -s tests -v
+
       - name: search_lcsc unit tests
         run: python3 -m unittest skills/lcsc/scripts/test_search_lcsc.py
 
@@ -109,6 +112,7 @@ jobs:
         env:
           KICAD_HAPPY_DIR: ${{ github.workspace }}
         run: |
+          python3 "$KICAD_HAPPY_DIR/.github/scripts/adapt_fab_gate_harness.py" /tmp/harness
           cd /tmp/harness
           python3 run_tests.py --smoke
 

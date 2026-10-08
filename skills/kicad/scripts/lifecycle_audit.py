@@ -28,7 +28,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -171,40 +170,9 @@ def _is_real_mpn(mpn: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _get_digikey_token() -> tuple[str, str] | None:
-    client_id = os.environ.get("DIGIKEY_CLIENT_ID", "")
-    client_secret = os.environ.get("DIGIKEY_CLIENT_SECRET", "")
-    if not client_id or not client_secret:
-        return None
-
-    # Token cache
-    cache_path = os.path.join(tempfile.gettempdir(), "digikey_token_cache.json")
-    try:
-        with open(cache_path) as f:
-            cache = json.load(f)
-        if cache.get("expires_at", 0) > time.time():
-            return cache["access_token"], client_id
-    except (OSError, json.JSONDecodeError, KeyError):
-        pass
-
-    try:
-        data = urllib.parse.urlencode({
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "client_credentials",
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.digikey.com/v1/oauth2/token",
-            data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            token_data = json.loads(resp.read())
-        token = token_data["access_token"]
-        with open(cache_path, "w") as f:
-            json.dump({"access_token": token, "expires_at": time.time() + 540}, f)
-        return token, client_id
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, KeyError):
-        return None
+    """Use the credential-bound process cache; never read/write token files."""
+    from digikey_auth import get_digikey_token
+    return get_digikey_token()
 
 
 def query_lifecycle_digikey(mpn: str) -> dict | None:

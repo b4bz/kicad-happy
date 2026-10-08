@@ -19,6 +19,23 @@ description: >-
 
 # KiCad Project Analysis Skill
 
+## Local fork release boundaries
+
+This fork uses credential-bound, process-only DigiKey token caching. Tokens are
+never persisted; legacy shared temporary-file caches are ignored. The `digikey`,
+`spice`, and `kicad` skills must remain installed together for the shared helper.
+
+Run `scripts/fab_release_gate.py` with schematic, PCB, Gerber, thermal, and EMC
+analyzer JSON. Missing/malformed inputs, skipped checks, and unresolved evidence
+blockers prevent PASS. Exit codes: 0 PASS, 1 FAIL, 2 INCOMPLETE/input error, 3 WARN.
+`--strict` promotes warnings to failures; it never permits skipped checks.
+PASS means the supplied analyzer checks passed, and still requires native KiCad
+ERC/DRC, current supplier rules, CAM/assembly inspection, and human release review.
+Report required missing evidence rather than manufacturing a passing JSON report.
+Preparation does not authorize supplier upload, ordering, payment, or publication;
+those actions require explicit user authorization. Work on copies for read-only
+reviews, because enrichment scripts may modify CAD properties and prune caches.
+
 ## Related Skills
 
 | Skill | Purpose |

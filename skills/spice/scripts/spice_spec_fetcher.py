@@ -18,6 +18,11 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
+from pathlib import Path
+import sys
+
+# Shared stdlib-only auth helper, alongside the core KiCad scripts.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "kicad" / "scripts"))
 
 
 # ---------------------------------------------------------------------------
@@ -235,50 +240,10 @@ def fetch_specs_lcsc(mpn):
 # ---------------------------------------------------------------------------
 
 def _get_digikey_token():
-    """Get DigiKey OAuth token using client credentials flow.
-
-    Returns:
-        access_token string or None
-    """
-    client_id = os.environ.get("DIGIKEY_CLIENT_ID")
-    client_secret = os.environ.get("DIGIKEY_CLIENT_SECRET")
-    if not client_id or not client_secret:
-        return None
-
-    # Check token cache
-    cache_path = "/tmp/digikey_token_cache.json"
-    try:
-        with open(cache_path) as f:
-            cache = json.load(f)
-        if cache.get("expires_at", 0) > time.time():
-            return cache["access_token"]
-    except (OSError, json.JSONDecodeError, KeyError):
-        pass
-
-    try:
-        data = urllib.parse.urlencode({
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "client_credentials",
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.digikey.com/v1/oauth2/token",
-            data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            token_data = json.loads(resp.read())
-
-        access_token = token_data["access_token"]
-        # Cache with 9-minute TTL (token valid for 10 min)
-        with open(cache_path, "w") as f:
-            json.dump({
-                "access_token": access_token,
-                "expires_at": time.time() + 540,
-            }, f)
-        return access_token
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, KeyError):
-        return None
+    """Use the credential-bound process cache; never read/write token files."""
+    from digikey_auth import get_digikey_token
+    result = get_digikey_token()
+    return result[0] if result else None
 
 
 def fetch_specs_digikey(mpn):
